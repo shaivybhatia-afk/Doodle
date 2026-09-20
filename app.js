@@ -1,24 +1,38 @@
-/* Air Doodle: camera and mouse drawing, shape recognition, cute art, sharing. */
+/* Air Doodle: camera and mouse drawing, gestures, shape recognition, cute art, sharing. */
 (function () {
   'use strict';
 
   const VISION_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
   const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-  const PAUSE_MS = 1000;        // pen up for this long, then recognise
-  const MIN_SCORE = 0.72;       // below this we say "not sure"
+  const MIN_SCORE = 0.72;       // below this we make a one-of-a-kind doodle instead
+  const HOLD_MS = 1000;         // open palm held this long = done
+  const PALM_GRACE_MS = 200;    // a flicker shorter than this does not cancel the hold
   const PINCH_DOWN = 0.32;      // pinch distance / palm size to start drawing
   const PINCH_UP = 0.5;         // ...and to stop
   const HAND_LOST_MS = 300;
   const HISTORY_KEY = 'airdoodle.recent.v1';
+  const GESTURE_KEY = 'airdoodle.gesture';
   const HISTORY_MAX = 12;
-  const NOT_SURE = 'Hmm, not sure what that is. Try again?';
+  const CHEERS = ['Yay!', 'Ta-da!', 'Nice one!', 'Look at that!'];
+  const CONFETTI = ['#f7b5c8', '#f9dc8d', '#a9d5f2', '#b7e4cf', '#d5c8f3', '#f9cfb0', '#ff5c8a'];
+
+  const HINTS = {
+    pointer: 'Point to draw · Peace sign to lift · Open palm to finish',
+    pinch: 'Pinch to draw · Open fingers to lift · Hold an open palm to finish',
+    mouse: 'Draw with your mouse or finger · Press Done when you are finished',
+  };
 
   const $ = (id) => document.getElementById(id);
   const el = {
     welcome: $('welcome'), app: $('app'), stage: $('stage'), video: $('video'), ink: $('ink'),
-    ring: $('ring'), pill: $('pill'), loading: $('loading'), loadingText: $('loading-text'),
-    result: $('result'), art: $('art'), sparks: $('sparks'), label: $('label'), notice: $('notice'),
+    ring: $('ring'), palm: $('palm'), palmFill: $('palm-fill'), pill: $('pill'), hint: $('hint'),
+    loading: $('loading'), loadingText: $('loading-text'), ready: $('ready'), start: $('btn-start'),
+    count: $('count'), countText: $('count-text'),
+    result: $('result'), art: $('art'), confetti: $('confetti'), cheer: $('cheer'), name: $('name'),
+    notice: $('notice'), toolbar: $('toolbar'), cards: $('cards'),
+    actsDraw: $('acts-draw'), actsResult: $('acts-result'),
+    undo: $('btn-undo'), restart: $('btn-restart'), done: $('btn-done'),
     again: $('btn-again'), share: $('btn-share'), save: $('btn-save'), switchBtn: $('btn-switch'),
     recent: $('recent'), thumbs: $('thumbs'), clear: $('btn-clear'),
   };
@@ -26,18 +40,22 @@
 
   const state = {
     mode: null,          // 'camera' | 'mouse'
-    phase: 'idle',       // 'idle' | 'result' | 'unsure'
-    points: [],          // normalised 0..1 stage coordinates
+    gesture: 'pointer',  // 'pointer' | 'pinch'
+    phase: 'idle',       // 'loading' | 'ready' | 'count' | 'idle' | 'result'
+    strokes: [],         // arrays of normalised 0..1 stage points
+    cur: null,           // stroke being drawn
     penDown: false,
-    pauseTimer: null,
     stream: null,
     landmarker: null,
     raf: 0,
     lastVideoTime: -1,
     handLostAt: 0,
-    pinchVotes: 0,
+    pose: 'other', pendingPose: null, poseVotes: 0,
+    fingers: [false, false, false, false],
+    palmSince: 0, palmLostAt: 0,
     current: null,       // item currently shown as a result
     startToken: 0,
+    timers: [],
   };
 
   /* ---------- small helpers ---------- */
@@ -45,7 +63,12 @@
   const svgUri = (svg) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
   const stageSize = () => ({ w: el.stage.clientWidth || 1, h: el.stage.clientHeight || 1 });
   const setPill = (t) => { el.pill.textContent = t || ''; };
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const rand = (a, b) => a + Math.random() * (b - a);
   function setNotice(t) { el.notice.textContent = t || ''; el.notice.hidden = !t; }
+  function later(fn, ms) { const id = setTimeout(fn, ms); state.timers.push(id); return id; }
+  function clearTimers() { state.timers.forEach(clearTimeout); state.timers = []; }
+  function totalPoints() { return state.strokes.reduce((n, s) => n + s.length, 0); }
 
   // One Euro filter: smooth when slow, responsive when fast
   class OneEuro {
@@ -80,214 +103,323 @@
     redraw();
   }
 
+  function strokePath(p) {
+    ctx.beginPath();
+    ctx.moveTo(p[0].x, p[0].y);
+    for (let i = 1; i < p.length - 1; i++) {
+      ctx.quadraticCurveTo(p[i].x, p[i].y, (p[i].x + p[i + 1].x) / 2, (p[i].y + p[i + 1].y) / 2);
+    }
+    ctx.lineTo(p[p.length - 1].x, p[p.length - 1].y);
+  }
+
   function redraw() {
     const { w, h } = stageSize();
     ctx.clearRect(0, 0, w, h);
-    const p = state.points.map((q) => ({ x: q.x * w, y: q.y * h }));
-    if (!p.length) return;
-    const stroke = (color, width) => {
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const lines = state.strokes.filter((s) => s.length).map((s) => s.map((q) => ({ x: q.x * w, y: q.y * h })));
+    const paint = (color, width) => {
       ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width;
-      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      if (p.length < 3) {
-        ctx.beginPath(); ctx.arc(p[0].x, p[0].y, width / 2, 0, Math.PI * 2); ctx.fill();
-        if (p.length === 2) { ctx.beginPath(); ctx.moveTo(p[0].x, p[0].y); ctx.lineTo(p[1].x, p[1].y); ctx.stroke(); }
-        return;
-      }
-      ctx.beginPath();
-      ctx.moveTo(p[0].x, p[0].y);
-      for (let i = 1; i < p.length - 1; i++) {
-        const mx = (p[i].x + p[i + 1].x) / 2, my = (p[i].y + p[i + 1].y) / 2;
-        ctx.quadraticCurveTo(p[i].x, p[i].y, mx, my);
-      }
-      ctx.lineTo(p[p.length - 1].x, p[p.length - 1].y);
-      ctx.stroke();
+      lines.forEach((p) => {
+        if (p.length < 3) {
+          ctx.beginPath(); ctx.arc(p[0].x, p[0].y, width / 2, 0, Math.PI * 2); ctx.fill();
+          if (p.length === 2) { ctx.beginPath(); ctx.moveTo(p[0].x, p[0].y); ctx.lineTo(p[1].x, p[1].y); ctx.stroke(); }
+          return;
+        }
+        strokePath(p);
+        ctx.stroke();
+      });
     };
-    stroke('rgba(255,255,255,.95)', 13);
-    stroke('#ff5c8a', 7);
+    paint('rgba(255,255,255,.95)', 13);
+    paint('#ff5c8a', 7);
   }
 
   function addPoint(nx, ny) {
-    const last = state.points[state.points.length - 1];
+    if (!state.penDown) return;
+    // if the current line was undone mid-stroke, start a fresh one
+    if (!state.cur || state.strokes[state.strokes.length - 1] !== state.cur) {
+      state.cur = [];
+      state.strokes.push(state.cur);
+    }
+    const last = state.cur[state.cur.length - 1];
     const { w, h } = stageSize();
     if (last && Math.hypot((nx - last.x) * w, (ny - last.y) * h) < 2.5) return;
-    state.points.push({ x: nx, y: ny });
+    state.cur.push({ x: nx, y: ny });
     redraw();
+    updateButtons();
   }
 
-  /* ---------- pen up / down and auto recognise ---------- */
+  function updateButtons() {
+    const has = totalPoints() > 0;
+    el.undo.disabled = !has;
+    el.restart.disabled = !has;
+  }
+
+  /* ---------- pen up / down, undo, done ---------- */
 
   function penStart() {
-    if (state.phase !== 'idle') return;
-    clearTimeout(state.pauseTimer);
+    if (state.phase !== 'idle' || state.penDown) return;
     state.penDown = true;
+    state.cur = [];
+    state.strokes.push(state.cur);
     el.ring.classList.add('down');
     setPill('Drawing...');
+    updateButtons();
   }
 
   function penEnd() {
     if (!state.penDown) return;
     state.penDown = false;
     el.ring.classList.remove('down');
-    if (state.phase !== 'idle') return;
-    if (!state.points.length) return;
-    setPill('Nice! Hold still...');
-    clearTimeout(state.pauseTimer);
-    state.pauseTimer = setTimeout(finish, PAUSE_MS);
+    // a lone point is not a line
+    if (state.cur && state.cur.length < 2) {
+      const i = state.strokes.indexOf(state.cur);
+      if (i >= 0) state.strokes.splice(i, 1);
+      redraw();
+    }
+    state.cur = null;
+    updateButtons();
+    if (state.phase === 'idle') idleHint();
   }
 
   function idleHint() {
-    setPill(state.mode === 'camera' ? 'Pinch to draw' : 'Draw a simple shape');
+    if (state.mode === 'mouse') { setPill(totalPoints() ? 'Add more, or press Done' : 'Draw a simple shape'); return; }
+    if (totalPoints()) setPill(state.gesture === 'pointer' ? 'Add more, or open your palm to finish' : 'Add more, or hold an open palm to finish');
+    else setPill(state.gesture === 'pointer' ? 'Point to draw' : 'Pinch to draw');
+  }
+
+  function undoLine() {
+    if (state.phase !== 'idle' || !state.strokes.length) return;
+    state.strokes.pop();
+    state.cur = null;
+    redraw(); updateButtons(); idleHint();
+  }
+
+  function startOver() {
+    if (state.phase !== 'idle') return;
+    state.strokes = []; state.cur = null;
+    redraw(); updateButtons(); idleHint();
   }
 
   function finish() {
-    clearTimeout(state.pauseTimer);
-    if (state.phase !== 'idle' || state.penDown) return;
+    if (state.phase !== 'idle') return;
+    resetPalm();
+    if (state.penDown) penEnd();
     const { w, h } = stageSize();
-    const px = state.points.map((p) => ({ x: p.x * w, y: p.y * h }));
-    const xs = px.map((p) => p.x), ys = px.map((p) => p.y);
-    const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
-    const big = Math.max(bw, bh);
-    const rec = px.length >= 8 && big > 0.1 * Math.min(w, h)
-      ? window.Recognizer.recognize(px)
-      : { name: null, score: 0 };
-    state.lastRecognition = rec;
-
-    if (!rec.name || rec.score < MIN_SCORE) {
-      showUnsure();
+    const strokesPx = state.strokes.filter((s) => s.length > 1).map((s) => s.map((p) => ({ x: p.x * w, y: p.y * h })));
+    const flat = [].concat(...strokesPx);
+    if (flat.length < 4) {
+      setPill('Draw something first');
+      later(idleHint, 1800);
       return;
     }
-    const art = window.SHAPE_ART[rec.name];
-    const item = { shape: rec.name, label: art.label, svg: art.svg, date: new Date().toISOString() };
-    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    const minSide = Math.min(w, h);
-    const size = Math.min(Math.max(big * 1.3, minSide * 0.32), minSide * 0.82);
-    const ax = Math.min(Math.max(cx, size / 2), w - size / 2);
-    const ay = Math.min(Math.max(cy, size / 2), h - size / 2);
+    const xs = flat.map((p) => p.x), ys = flat.map((p) => p.y);
+    const big = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    if (big < 0.04 * Math.min(w, h)) {
+      setPill('Draw a little bigger');
+      later(idleHint, 1800);
+      return;
+    }
+    const rec = flat.length >= 8 ? window.Recognizer.recognize(flat) : { name: null, score: 0 };
+    state.lastRecognition = rec;
+    const matched = rec.name && rec.score >= MIN_SCORE ? rec.name : null;
+    const art = window.Art.build(matched, strokesPx);
+    const item = { shape: art.shape || 'doodle', label: art.label, svg: art.svg, date: new Date().toISOString() };
     saveHistory(item);
-    showResult(item, { cx: ax / w, cy: ay / h, size: size / w });
+    showResult(item, placeArt(art), matched ? CHEERS[Math.floor(Math.random() * CHEERS.length)] : 'Hmm, didn’t quite catch that one.');
   }
 
-  function showResult(item, place) {
+  // where to put the 400 x 400 art so it sits over what they drew
+  function placeArt(art) {
+    const { w, h } = stageSize();
+    const minSide = Math.min(w, h);
+    const size = clamp(window.Art.CANVAS / art.unitsPerPx, minSide * 0.52, minSide * 0.97);
+    const k = size / window.Art.CANVAS;
+    const slack = 0.06 * size;
+    const left = clamp(art.strokeCentre.x - art.anchor.x * k, Math.min(0, w - size) - slack, Math.max(0, w - size) + slack);
+    const top = clamp(art.strokeCentre.y - art.anchor.y * k, Math.min(0, h - size) - slack, Math.max(0, h - size) + slack);
+    return { left: left / w, top: top / h, size: size / w, cx: (left + size / 2) / w, cy: (top + size / 2) / h };
+  }
+
+  function showResult(item, place, cheer) {
     state.phase = 'result';
     state.current = item;
-    place = place || { cx: 0.5, cy: 0.46, size: Math.min(0.6, 0.6 * (el.stage.clientHeight / el.stage.clientWidth)) };
-    el.result.classList.remove('unsure');
-    el.art.style.left = place.cx * 100 + '%';
-    el.art.style.top = place.cy * 100 + '%';
+    clearTimers();
+    resetPalm();
+    if (!place) {
+      const { w, h } = stageSize();
+      const size = Math.min(w, h) * 0.8;
+      const left = (w - size) / 2, top = (h - size) / 2 - 0.02 * h;
+      place = { left: left / w, top: top / h, size: size / w, cx: (left + size / 2) / w, cy: (top + size / 2) / h };
+    }
+    el.art.style.left = place.left * 100 + '%';
+    el.art.style.top = place.top * 100 + '%';
     el.art.style.width = place.size * 100 + '%';
     el.art.alt = item.label;
-    // restart the reveal animation each time
     el.art.removeAttribute('src');
     void el.art.offsetWidth;
     el.art.src = svgUri(item.svg);
-    el.label.textContent = item.label;
+    el.cheer.textContent = cheer || '';
+    el.name.textContent = item.label;
     // hide then show so the reveal animation replays every time
     el.result.hidden = true;
     void el.result.offsetWidth;
     el.result.hidden = false;
-    el.ring.hidden = true;
+    el.ring.hidden = true; el.palm.hidden = true;
+    el.ink.style.opacity = '0';
+    el.hint.textContent = '';
     setPill('');
-    el.again.hidden = false; el.share.hidden = false; el.save.hidden = false;
+    el.actsDraw.hidden = true; el.actsResult.hidden = false;
     setNotice('');
-    burst(place);
-    markActive();
-  }
-
-  function showUnsure() {
-    state.phase = 'unsure';
-    state.current = null;
-    el.result.classList.add('unsure');
-    el.label.textContent = NOT_SURE;
-    el.result.hidden = false;
-    el.ring.hidden = true;
-    setPill('');
-    el.again.hidden = false; el.share.hidden = true; el.save.hidden = true;
+    el.confetti.textContent = '';
+    if (cheer) burst(place);
     markActive();
   }
 
   function burst(place) {
-    el.sparks.textContent = '';
     const { w, h } = stageSize();
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < 34; i++) {
       const s = document.createElement('span');
-      s.textContent = '✦';
-      const ang = (i / 9) * Math.PI * 2 + Math.random() * 0.5;
-      const dist = 50 + Math.random() * 70;
+      if (Math.random() < 0.4) s.className = 'round';
+      const ang = Math.random() * Math.PI * 2, dist = rand(70, Math.min(w, h) * 0.55);
       s.style.left = place.cx * w + 'px';
       s.style.top = place.cy * h + 'px';
+      s.style.background = CONFETTI[i % CONFETTI.length];
       s.style.setProperty('--dx', Math.cos(ang) * dist + 'px');
-      s.style.setProperty('--dy', Math.sin(ang) * dist + 'px');
-      s.style.animationDelay = (0.1 + Math.random() * 0.2) + 's';
-      el.sparks.appendChild(s);
+      s.style.setProperty('--dy', Math.sin(ang) * dist - 30 + 'px');
+      s.style.setProperty('--rot', rand(-540, 540) + 'deg');
+      s.style.animationDelay = rand(0.05, 0.3) + 's';
+      el.confetti.appendChild(s);
     }
   }
 
   function drawAgain() {
-    clearTimeout(state.pauseTimer);
-    state.points = [];
-    state.penDown = false;
+    clearTimers();
+    state.strokes = []; state.cur = null; state.penDown = false;
     state.phase = 'idle';
     state.current = null;
+    state.pose = 'other'; state.pendingPose = null; state.poseVotes = 0;
+    resetPalm();
     el.result.hidden = true;
+    el.ink.style.opacity = '1';
     el.ring.classList.remove('down');
-    el.ring.hidden = state.mode !== 'camera';
-    el.again.hidden = true; el.share.hidden = true; el.save.hidden = true;
+    el.ring.hidden = true;
+    el.actsDraw.hidden = false; el.actsResult.hidden = true;
     setNotice('');
-    redraw();
+    redraw(); updateButtons();
+    el.hint.textContent = HINTS[state.mode === 'mouse' ? 'mouse' : state.gesture];
     idleHint();
     markActive();
   }
 
   /* ---------- camera mode ---------- */
 
+  function resetPalm() {
+    state.palmSince = 0; state.palmLostAt = 0;
+    el.palm.hidden = true;
+    el.palmFill.style.strokeDashoffset = '276.5';
+  }
+
+  // finger extended: fingertip is much farther from the wrist than its knuckle (about 1.7x when
+  // straight, about 0.9x when curled). Two thresholds stop it flickering in between.
+  function fingerUp(lm, i, tip, mcp, vw, vh) {
+    const d = (a, b) => Math.hypot((a.x - b.x) * vw, (a.y - b.y) * vh);
+    const r = d(lm[0], lm[tip]) / Math.max(d(lm[0], lm[mcp]), 1e-3);
+    if (r > 1.45) state.fingers[i] = true; else if (r < 1.25) state.fingers[i] = false;
+    return state.fingers[i];
+  }
+
+  function classify(lm, vw, vh) {
+    const d = (a, b) => Math.hypot((a.x - b.x) * vw, (a.y - b.y) * vh);
+    const palm = Math.max(d(lm[0], lm[9]), 1e-3);
+    const idx = fingerUp(lm, 0, 8, 5, vw, vh), mid = fingerUp(lm, 1, 12, 9, vw, vh);
+    const ring = fingerUp(lm, 2, 16, 13, vw, vh), pinky = fingerUp(lm, 3, 20, 17, vw, vh);
+    const thumbOut = d(lm[4], lm[5]) / palm > 0.6;
+    const pinch = d(lm[4], lm[8]) / palm;
+    const openHand = idx && mid && ring && pinky && thumbOut;
+    let pose;
+    if (state.gesture === 'pinch') {
+      const pinched = state.pose === 'draw' ? pinch < PINCH_UP : pinch < PINCH_DOWN;
+      pose = pinched ? 'draw' : openHand && pinch > 0.7 ? 'palm' : 'lift';
+    } else if (openHand) pose = 'palm';
+    else if (idx && !mid && !ring && !pinky) pose = 'draw';
+    else if (idx && mid && !ring && !pinky) pose = 'lift';
+    else pose = 'other';
+    const tip = state.gesture === 'pinch'
+      ? { x: (lm[4].x + lm[8].x) / 2, y: (lm[4].y + lm[8].y) / 2 }
+      : { x: lm[8].x, y: lm[8].y };
+    return { pose, tip, palmPx: palm };
+  }
+
   // landmarks: array of {x,y} normalised to the video frame, or null when no hand
   function handleHand(lm, now) {
     if (state.mode !== 'camera') return;
+    if (state.phase === 'loading' || state.phase === 'result') { el.ring.hidden = true; return; }
     const vw = el.video.videoWidth || 4, vh = el.video.videoHeight || 3;
+
     if (!lm) {
       if (!state.handLostAt) state.handLostAt = now;
       if (now - state.handLostAt > HAND_LOST_MS) {
         el.ring.hidden = true;
+        resetPalm();
         fx.reset(); fy.reset();
-        state.pinchVotes = 0;
+        state.pose = 'other'; state.pendingPose = null; state.poseVotes = 0;
         if (state.penDown) penEnd();
-        if (state.phase === 'idle' && !state.penDown && !state.points.length) setPill('Show me your hand');
+        if (state.phase === 'idle' && !state.penDown && !totalPoints()) setPill('Show me your hand');
       }
       return;
     }
     state.handLostAt = 0;
 
-    const t = lm[4], i = lm[8], wrist = lm[0], mid = lm[9];
-    const dist = (a, b) => Math.hypot((a.x - b.x) * vw, (a.y - b.y) * vh);
-    const palm = Math.max(dist(wrist, mid), 1e-3);
-    const ratio = dist(t, i) / palm;
-
-    // mirrored: flip x so the line matches what the user sees
     const { w, h } = stageSize();
-    const px = fx.filter((1 - (t.x + i.x) / 2) * w, now);
-    const py = fy.filter(((t.y + i.y) / 2) * h, now);
+    const c = classify(lm, vw, vh);
+    // mirrored: flip x so the line matches what the user sees
+    const px = fx.filter((1 - c.tip.x) * w, now);
+    const py = fy.filter(c.tip.y * h, now);
 
-    if (state.phase !== 'idle') return;
-
-    el.ring.hidden = false;
-    el.ring.style.transform = '';
-    el.ring.style.left = px + 'px';
-    el.ring.style.top = py + 'px';
-
-    // hysteresis + two-frame vote so a flicker does not break the line
-    const wantDown = state.penDown ? ratio < PINCH_UP : ratio < PINCH_DOWN;
-    if (wantDown !== state.penDown) {
-      state.pinchVotes++;
-      if (state.pinchVotes >= 2) {
-        state.pinchVotes = 0;
-        if (wantDown) penStart(); else penEnd();
-      }
-    } else {
-      state.pinchVotes = 0;
+    if (state.phase !== 'idle') {
+      // Start button or countdown: just show the ring so they can find their hand
+      el.ring.hidden = false;
+      el.ring.style.left = px + 'px'; el.ring.style.top = py + 'px';
+      return;
     }
 
-    if (state.penDown) addPoint(px / w, py / h);
-    else if (!state.points.length) setPill('Pinch to draw');
+    // a pose must hold for two frames before it counts, so one bad frame does not break a line
+    if (c.pose !== state.pose) {
+      if (c.pose === state.pendingPose) state.poseVotes++;
+      else { state.pendingPose = c.pose; state.poseVotes = 1; }
+      if (state.poseVotes >= 2) { state.pose = c.pose; state.pendingPose = null; state.poseVotes = 0; }
+    } else { state.pendingPose = null; state.poseVotes = 0; }
+
+    // open palm held = done (only once there is something to finish)
+    if (state.pose === 'palm' && totalPoints() > 0) {
+      state.palmLostAt = 0;
+      if (!state.palmSince) state.palmSince = now;
+      if (state.penDown) penEnd();
+      const p = clamp((now - state.palmSince) / HOLD_MS, 0, 1);
+      const size = clamp(c.palmPx * Math.min(w, h) * 2.6, 90, 260);
+      el.palm.hidden = false;
+      el.palm.style.width = el.palm.style.height = size + 'px';
+      el.palm.style.left = (1 - lm[9].x) * w + 'px'; el.palm.style.top = lm[9].y * h + 'px';
+      el.palmFill.style.strokeDashoffset = String(276.5 * (1 - p));
+      el.ring.hidden = true;
+      setPill(p < 1 ? 'Hold to finish. Close your hand to cancel' : 'Done!');
+      if (p >= 1) finish();
+      return;
+    }
+    if (state.palmSince) {
+      if (!state.palmLostAt) state.palmLostAt = now;
+      if (now - state.palmLostAt > PALM_GRACE_MS) { resetPalm(); idleHint(); }
+    }
+
+    el.ring.hidden = false;
+    el.ring.style.left = px + 'px'; el.ring.style.top = py + 'px';
+
+    if (state.pose === 'draw') {
+      if (!state.penDown) penStart();
+      addPoint(px / w, py / h);
+    } else if (state.penDown) {
+      penEnd();
+    }
   }
 
   async function loadLandmarker() {
@@ -331,11 +463,13 @@
 
   async function startCamera() {
     const token = ++state.startToken;
+    clearTimers();
     enterApp('camera');
+    state.phase = 'loading';
     showLoading('Waking up the camera...');
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      return fallbackToMouse('This browser cannot open a camera here, so let\'s draw with the mouse instead.');
+      return fallbackToMouse('This browser cannot open a camera here, so let’s draw with the mouse instead.');
     }
     try {
       state.stream = await navigator.mediaDevices.getUserMedia({
@@ -352,7 +486,7 @@
     if (token !== state.startToken) { stopCamera(); return; }
 
     el.video.srcObject = state.stream;
-    try { await el.video.play(); } catch (e) { /* autoplay is fine, muted */ }
+    try { await el.video.play(); } catch (e) { /* muted autoplay is fine */ }
     if (!el.video.videoWidth) {
       await new Promise((r) => { el.video.onloadedmetadata = r; setTimeout(r, 3000); });
     }
@@ -370,8 +504,7 @@
 
     showLoading('');
     sizeCanvas();
-    drawAgain();
-    setPill('Show me your hand');
+    showReady();
     state.lastVideoTime = -1;
     loop();
   }
@@ -382,10 +515,42 @@
     setNotice(message);
   }
 
+  /* ---------- Start button and countdown ---------- */
+
+  function showReady() {
+    drawAgain();
+    state.phase = 'ready';
+    el.ready.hidden = false;
+    setPill('Get your hand in view');
+  }
+
+  function onStart() {
+    if (state.phase !== 'ready') return;
+    const token = state.startToken;
+    el.ready.hidden = true;
+    state.phase = 'count';
+    setPill('');
+    const steps = [['3', 800], ['2', 800], ['1', 800], ['Draw!', 650]];
+    let t = 0;
+    steps.forEach(([text, ms], i) => {
+      later(() => {
+        if (token !== state.startToken) return;
+        el.count.hidden = false;
+        el.countText.textContent = text;
+        el.countText.className = text === 'Draw!' ? 'go' : '';
+        el.countText.style.animation = 'none'; void el.countText.offsetWidth; el.countText.style.animation = '';
+        if (i === steps.length - 1) { state.phase = 'idle'; idleHint(); }
+      }, t);
+      t += ms;
+    });
+    later(() => { el.count.hidden = true; }, t);
+  }
+
   /* ---------- mouse / touch mode ---------- */
 
   function startMouse() {
     state.startToken++;
+    clearTimers();
     stopCamera();
     enterApp('mouse');
     showLoading('');
@@ -417,34 +582,128 @@
   el.stage.addEventListener('pointerup', up);
   el.stage.addEventListener('pointercancel', up);
 
-  /* ---------- screens ---------- */
+  /* ---------- screens and controls ---------- */
 
   function enterApp(mode) {
     state.mode = mode;
     el.welcome.hidden = true;
     el.app.hidden = false;
     el.stage.dataset.mode = mode;
+    el.toolbar.hidden = mode !== 'camera';
     el.switchBtn.textContent = mode === 'camera' ? 'Draw with mouse instead' : 'Use camera instead';
-    el.ring.hidden = true;
-    el.result.hidden = true;
-    state.points = [];
+    el.ring.hidden = true; el.result.hidden = true; el.ready.hidden = true; el.count.hidden = true;
+    resetPalm();
+    state.strokes = []; state.cur = null; state.penDown = false;
     state.phase = 'idle';
-    clearTimeout(state.pauseTimer);
+    state.pose = 'other'; state.pendingPose = null; state.poseVotes = 0;
+    state.fingers = [false, false, false, false];
     redraw();
     setPill('');
-    el.again.hidden = true; el.share.hidden = true; el.save.hidden = true;
-    el.recent.hidden = !loadHistory().length;
+    el.hint.textContent = HINTS[mode === 'mouse' ? 'mouse' : state.gesture];
+    el.actsDraw.hidden = false; el.actsResult.hidden = true;
+    updateButtons();
     renderThumbs();
   }
 
-  document.getElementById('btn-camera').addEventListener('click', startCamera);
-  document.getElementById('btn-mouse').addEventListener('click', startMouse);
+  function setGesture(g, save = true) {
+    state.gesture = g === 'pinch' ? 'pinch' : 'pointer';
+    if (save) { try { localStorage.setItem(GESTURE_KEY, state.gesture); } catch (e) { /* storage unavailable */ } }
+    el.toolbar.querySelectorAll('[data-gesture]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.gesture === state.gesture)));
+    state.pose = 'other'; state.pendingPose = null; state.poseVotes = 0;
+    state.fingers = [false, false, false, false];
+    if (state.penDown) penEnd();
+    resetPalm();
+    if (state.mode === 'camera' && state.phase !== 'result') {
+      el.hint.textContent = HINTS[state.gesture];
+      if (state.phase === 'idle') idleHint();
+    }
+  }
+  (function initGesture() {
+    let g = 'pointer';
+    try { g = localStorage.getItem(GESTURE_KEY) || 'pointer'; } catch (e) { /* default */ }
+    setGesture(g, false);
+  })();
+  el.toolbar.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-gesture]');
+    if (b) setGesture(b.dataset.gesture);
+  });
+
+  $('btn-camera').addEventListener('click', startCamera);
+  $('btn-mouse').addEventListener('click', startMouse);
   el.switchBtn.addEventListener('click', () => (state.mode === 'camera' ? startMouse() : startCamera()));
+  el.start.addEventListener('click', onStart);
   el.again.addEventListener('click', drawAgain);
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.phase !== 'idle') drawAgain(); });
+  el.undo.addEventListener('click', undoLine);
+  el.restart.addEventListener('click', startOver);
+  el.done.addEventListener('click', () => {
+    if (state.phase === 'idle' && !totalPoints()) { setPill('Draw something first'); later(idleHint, 1800); return; }
+    finish();
+  });
+
+  // Space finishes, even if a button still has focus (so it never re-clicks Undo)
+  const spaceActive = (e) => e.key === ' ' && !el.app.hidden && state.phase === 'idle';
+  window.addEventListener('keydown', (e) => {
+    if (spaceActive(e)) { e.preventDefault(); if (!e.repeat) el.done.click(); }
+    else if (e.key === 'Escape' && state.phase === 'result') drawAgain();
+  });
+  window.addEventListener('keyup', (e) => { if (spaceActive(e)) e.preventDefault(); });
 
   if ('ResizeObserver' in window) new ResizeObserver(sizeCanvas).observe(el.stage);
   else window.addEventListener('resize', sizeCanvas);
+
+  /* ---------- shape cards ---------- */
+
+  function buildCards() {
+    window.Recognizer.guides.forEach((g) => {
+      const pts = g.points;
+      const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+      const x0 = Math.min(...xs), y0 = Math.min(...ys);
+      const gw = Math.max(...xs) - x0, gh = Math.max(...ys) - y0;
+      const s = Math.min(60 / (gw || 1), 38 / (gh || 1));
+      const ox = 40 - (gw * s) / 2, oy = 26 - (gh * s) / 2;
+      const P = pts.filter((_, i) => i % 2 === 0 || i === pts.length - 1).map((p) => ({ x: ox + (p.x - x0) * s, y: oy + (p.y - y0) * s }));
+      const d = P.map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join('');
+
+      // small arrow a little way along the line, pointing the way to draw
+      const a = Math.min(P.length - 2, Math.max(2, Math.round(P.length * 0.1)));
+      const dx = P[a + 1].x - P[a].x, dy = P[a + 1].y - P[a].y, m = Math.hypot(dx, dy) || 1;
+      const ux = dx / m, uy = dy / m, ax = P[a].x, ay = P[a].y;
+      const arrow = `M${(ax + ux * 5).toFixed(1)} ${(ay + uy * 5).toFixed(1)}L${(ax - ux * 2 - uy * 3.6).toFixed(1)} ${(ay - uy * 2 + ux * 3.6).toFixed(1)}L${(ax - ux * 2 + uy * 3.6).toFixed(1)} ${(ay - uy * 2 - ux * 3.6).toFixed(1)}Z`;
+
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'card'; b.setAttribute('role', 'listitem');
+      b.setAttribute('aria-label', 'Show how to draw a ' + g.name.toLowerCase());
+      b.innerHTML = `<svg viewBox="0 0 80 52" aria-hidden="true"><path class="dots" d="${d}"/><path class="live" d=""/><circle class="start" cx="${P[0].x.toFixed(1)}" cy="${P[0].y.toFixed(1)}" r="3.6"/><path class="arrow" d="${arrow}"/><circle class="pen" r="4.2" cx="${P[0].x.toFixed(1)}" cy="${P[0].y.toFixed(1)}"/></svg><span>${g.name}</span>`;
+      b.addEventListener('click', () => playCard(b, P));
+      el.cards.appendChild(b);
+    });
+  }
+
+  // quick "how to draw it" animation: the line draws itself with a moving dot
+  function playCard(btn, P) {
+    clearTimeout(btn._anim); cancelAnimationFrame(btn._anim);
+    const live = btn.querySelector('.live'), pen = btn.querySelector('.pen');
+    let total = 0; const cum = [0];
+    for (let i = 1; i < P.length; i++) { total += Math.hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y); cum.push(total); }
+    const dur = clamp(total * 24, 1200, 2200), t0 = performance.now();
+    el.cards.querySelectorAll('.card.playing').forEach((c) => { if (c !== btn) c.classList.remove('playing'); });
+    btn.classList.add('playing');
+    const step = (now) => {
+      const t = clamp((now - t0) / dur, 0, 1), e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      const target = e * total;
+      let i = 1; while (i < P.length - 1 && cum[i] < target) i++;
+      const f = clamp((target - cum[i - 1]) / (cum[i] - cum[i - 1] || 1), 0, 1);
+      const cx = P[i - 1].x + (P[i].x - P[i - 1].x) * f, cy = P[i - 1].y + (P[i].y - P[i - 1].y) * f;
+      let d = 'M' + P[0].x.toFixed(1) + ' ' + P[0].y.toFixed(1);
+      for (let k = 1; k < i; k++) d += 'L' + P[k].x.toFixed(1) + ' ' + P[k].y.toFixed(1);
+      d += 'L' + cx.toFixed(1) + ' ' + cy.toFixed(1);
+      live.setAttribute('d', d);
+      pen.setAttribute('cx', cx.toFixed(1)); pen.setAttribute('cy', cy.toFixed(1));
+      if (t < 1) btn._anim = requestAnimationFrame(step);
+      else btn._anim = setTimeout(() => { btn.classList.remove('playing'); live.setAttribute('d', ''); }, 900);
+    };
+    btn._anim = requestAnimationFrame(step);
+  }
 
   /* ---------- recent drawings ---------- */
 
@@ -460,9 +719,7 @@
     try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
   }
   function saveHistory(item) {
-    const list = [item, ...loadHistory()].slice(0, HISTORY_MAX);
-    storeHistory(list);
-    el.recent.hidden = false;
+    storeHistory([item, ...loadHistory()].slice(0, HISTORY_MAX));
     renderThumbs();
   }
   function renderThumbs() {
@@ -491,11 +748,11 @@
   }
   function viewHistory(item) {
     if (el.app.hidden) { enterApp('mouse'); sizeCanvas(); }
-    clearTimeout(state.pauseTimer);
-    state.penDown = false;
-    state.points = [];
+    clearTimers();
+    state.penDown = false; state.strokes = []; state.cur = null;
     redraw();
-    showResult(item, null);
+    el.ready.hidden = true; el.count.hidden = true;
+    showResult(item, null, '');
     el.app.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   el.clear.addEventListener('click', () => {
@@ -520,7 +777,7 @@
     await img.decode();
     g.drawImage(img, 130, 100, 820, 820);
     g.textAlign = 'center';
-    g.fillStyle = '#4b3a5e';
+    g.fillStyle = '#2f2740';
     g.font = '800 68px Nunito, ui-rounded, system-ui, sans-serif';
     g.fillText(item.label, size / 2, 990);
     g.fillStyle = '#ff5c8a';
@@ -567,8 +824,9 @@
 
   /* ---------- boot ---------- */
 
+  buildCards();
   renderThumbs();
 
   // exposed for tests and tinkering
-  window.AirDoodle = { state, handleHand, finish, loadHistory, makePng, onShare, onSave, startMouse, startCamera, drawAgain, viewHistory };
+  window.AirDoodle = { state, handleHand, finish, loadHistory, makePng, onShare, onSave, startMouse, startCamera, drawAgain, viewHistory, onStart, undoLine, startOver, setGesture, showReady };
 })();

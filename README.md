@@ -1,6 +1,6 @@
 # Air Doodle
 
-Draw a simple shape in the air with your finger in front of your webcam and get a cute vector version of it.
+Draw a simple shape in the air with your finger in front of your webcam and get a charming little character built from your own line.
 Plain HTML, CSS and JavaScript. No build step, no backend, no accounts.
 
 ## Run it
@@ -14,12 +14,19 @@ Open `index.html` in a browser (Chrome, Edge, Safari or Firefox). Or serve the f
 Push this folder to a repo, then Settings > Pages > Deploy from branch > `main` / root.
 The camera needs HTTPS, which GitHub Pages provides.
 
-## How it works
+## How to play
 
-- `app.js`: camera and mouse drawing, pinch detection, smoothing, recent drawings, sharing
-- `recognizer.js`: $1 Unistroke Recognizer with generated templates (no AI calls)
-- `shapes.js`: the hand-made cute SVG art
+1. Press Start, then follow the 3, 2, 1 countdown.
+2. Pointer mode (default): raise only your index finger to draw, add your middle finger (peace sign) to lift.
+   Pinch mode: pinch thumb and index to draw, open your fingers to lift.
+3. Finish with an open palm held for one second, the Done button, or the space bar.
+
+## Files
+
+- `app.js`: camera and mouse drawing, gestures, Start and countdown, recent drawings, sharing
+- `recognizer.js`: $1 Unistroke Recognizer with generated templates, plus the "how to draw it" guides (no AI calls)
+- `art.js`: smooths your stroke and dresses it up per shape (fills, outlines, faces, extras)
 - Hand tracking: MediaPipe Tasks Vision HandLandmarker, loaded from jsDelivr and Google storage on demand
-- Shapes: circle, heart, wave, swirl, star, triangle, square, zigzag
+- Shapes: circle, heart, star, triangle, square, diamond, wave, swirl, zigzag, cloud, moon, lightning bolt, infinity, check mark
 
-Nothing is recorded or uploaded. Recent drawings live in your browser's localStorage.
+Nothing is recorded or uploaded. Recent drawings and your mode choice live in your browser's localStorage.
