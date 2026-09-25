@@ -17,8 +17,15 @@
   const CHEERS = ['Yay!', 'Ta-da!', 'Nice one!', 'Look at that!'];
   const CONFETTI = ['#f7b5c8', '#f9dc8d', '#a9d5f2', '#b7e4cf', '#d5c8f3', '#f9cfb0', '#ff5c8a'];
 
+  // your hand icons (draw and peace sign), styled with the current text colour
+  const ICON_ATTR = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-miterlimit="10" aria-hidden="true"';
+  const ICONS = {
+    point: `<svg ${ICON_ATTR}><path d="M17.13,22.5H9.87a2,2,0,1,1,0-4.05h1.86L5.06,11.78a2,2,0,0,1-.19-2.65A1.92,1.92,0,0,1,7.68,9l4.05,4.05L15.81,10a1.9,1.9,0,0,1,2.49.18h0a17.3,17.3,0,0,1,4.17,6.74l.06.19"/><path d="M13,1.5H8.25A1.91,1.91,0,0,0,6.34,3.41h0A1.92,1.92,0,0,0,8.25,5.32h2.86A1.9,1.9,0,0,1,13,7.23h0a1.91,1.91,0,0,1-1.91,1.91H8.29"/></svg>`,
+    peace: `<svg ${ICON_ATTR}><path d="M7.28,22.84l-.52-.52A11.13,11.13,0,0,1,3.5,14.45h0A4.84,4.84,0,0,1,4.92,11h0A4.79,4.79,0,0,1,8.34,9.62h1.77A1.89,1.89,0,0,1,12,11.5h0a1.89,1.89,0,0,1-1.89,1.89H7.28"/><path d="M7.28,13.39l.34.14A7,7,0,0,1,12,20h0"/><path d="M17.24,22.32a11.13,11.13,0,0,0,3.26-7.87"/><path d="M6,9.62,4.84,3.38A1.9,1.9,0,0,1,6.37,1.19a1.84,1.84,0,0,1,.33,0A1.89,1.89,0,0,1,8.56,2.73l1.23,7"/><path d="M10.37,10.05l1.29-7.32a1.89,1.89,0,0,1,1.86-1.57,1.84,1.84,0,0,1,.33,0,1.9,1.9,0,0,1,1.53,2.19L14.26,9.71"/><rect x="12.94" y="9.62" width="3.78" height="6.61" rx="1.89"/><rect x="16.72" y="10.56" width="3.78" height="5.67" rx="1.89"/></svg>`,
+  };
+
   const HINTS = {
-    pointer: 'Point to draw · Peace sign to lift · Open palm to finish',
+    pointer: `${ICONS.point}Point to draw \u00b7 ${ICONS.peace}Peace sign to lift \u00b7 Open palm to finish`,
     pinch: 'Pinch to draw · Open fingers to lift · Hold an open palm to finish',
     mouse: 'Draw with your mouse or finger · Press Done when you are finished',
   };
@@ -306,7 +313,7 @@
     el.actsDraw.hidden = false; el.actsResult.hidden = true;
     setNotice('');
     redraw(); updateButtons();
-    el.hint.textContent = HINTS[state.mode === 'mouse' ? 'mouse' : state.gesture];
+    el.hint.innerHTML = HINTS[state.mode === 'mouse' ? 'mouse' : state.gesture];
     idleHint();
     markActive();
   }
@@ -599,7 +606,7 @@
     state.fingers = [false, false, false, false];
     redraw();
     setPill('');
-    el.hint.textContent = HINTS[mode === 'mouse' ? 'mouse' : state.gesture];
+    el.hint.innerHTML = HINTS[mode === 'mouse' ? 'mouse' : state.gesture];
     el.actsDraw.hidden = false; el.actsResult.hidden = true;
     updateButtons();
     renderThumbs();
@@ -614,7 +621,7 @@
     if (state.penDown) penEnd();
     resetPalm();
     if (state.mode === 'camera' && state.phase !== 'result') {
-      el.hint.textContent = HINTS[state.gesture];
+      el.hint.innerHTML = HINTS[state.gesture];
       if (state.phase === 'idle') idleHint();
     }
   }
@@ -824,6 +831,7 @@
 
   /* ---------- boot ---------- */
 
+  document.querySelectorAll('[data-icon]').forEach((n) => { n.innerHTML = ICONS[n.dataset.icon] || ''; });
   buildCards();
   renderThumbs();
 

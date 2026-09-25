@@ -6,7 +6,7 @@
   'use strict';
 
   const INK = '#3f3352';
-  const OUT = 9;
+  const OUT = 7;
   const CANVAS = 400;
   const f = (n) => +n.toFixed(1);
   // seeded per build so the layout pass and the render pass make the same choices
@@ -112,9 +112,19 @@
   /* ---------- little SVG bits ---------- */
 
   const sparkle = (x, y, r, fill = '#fff') =>
-    `<path d="M${f(x)} ${f(y - r)}Q${f(x + r * 0.16)} ${f(y - r * 0.16)} ${f(x + r)} ${f(y)}Q${f(x + r * 0.16)} ${f(y + r * 0.16)} ${f(x)} ${f(y + r)}Q${f(x - r * 0.16)} ${f(y + r * 0.16)} ${f(x - r)} ${f(y)}Q${f(x - r * 0.16)} ${f(y - r * 0.16)} ${f(x)} ${f(y - r)}Z" fill="${fill}" stroke="${INK}" stroke-width="3.5"/>`;
+    `<path d="M${f(x)} ${f(y - r)}Q${f(x + r * 0.16)} ${f(y - r * 0.16)} ${f(x + r)} ${f(y)}Q${f(x + r * 0.16)} ${f(y + r * 0.16)} ${f(x)} ${f(y + r)}Q${f(x - r * 0.16)} ${f(y + r * 0.16)} ${f(x - r)} ${f(y)}Q${f(x - r * 0.16)} ${f(y - r * 0.16)} ${f(x)} ${f(y - r)}Z" fill="${fill}" stroke="${INK}" stroke-width="3"/>`;
 
   const dot = (x, y, r, fill = C.white) => `<circle cx="${f(x)}" cy="${f(y)}" r="${r}" fill="${fill}" stroke="${INK}" stroke-width="3"/>`;
+
+  // a small leafy sprig, a nature accent used in place of some sparkles
+  const LEAF = ['#b9d9a8', '#c8e2b8', '#a9d1a0'];
+  const sprig = (x, y, rot = 0, k = 1) => {
+    const l1 = LEAF[Math.floor(rng() * LEAF.length)], l2 = LEAF[Math.floor(rng() * LEAF.length)];
+    return `<g transform="translate(${f(x)} ${f(y)}) rotate(${rot}) scale(${k})" stroke="${INK}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">` +
+      `<path d="M0 0Q3 -18 0 -36" fill="none"/>` +
+      `<path d="M0 -10Q-17 -14 -19 -30Q-3 -28 0 -10Z" fill="${l1}"/>` +
+      `<path d="M0 -20Q17 -24 19 -40Q3 -38 0 -20Z" fill="${l2}"/></g>`;
+  };
 
   // kind: happy | sleepy | zap | calm
   function face(x, y, s = 1, kind = 'happy') {
@@ -130,15 +140,15 @@
         `<circle cx="${f(x - g + 1.5 * s)}" cy="${f(ey + 1 * s)}" r="${f(3.4 * s)}" fill="${INK}"/>` +
         `<circle cx="${f(x + g + 1.5 * s)}" cy="${f(ey + 1 * s)}" r="${f(3.4 * s)}" fill="${INK}"/>`;
     } else {
-      eyes = `<circle cx="${f(x - g)}" cy="${f(ey)}" r="${f(5 * s)}" fill="${INK}"/><circle cx="${f(x + g)}" cy="${f(ey)}" r="${f(5 * s)}" fill="${INK}"/>` +
+      eyes = `<circle cx="${f(x - g)}" cy="${f(ey)}" r="${f(4.4 * s)}" fill="${INK}"/><circle cx="${f(x + g)}" cy="${f(ey)}" r="${f(4.4 * s)}" fill="${INK}"/>` +
         `<circle cx="${f(x - g - 1.5 * s)}" cy="${f(ey - 1.7 * s)}" r="${f(1.7 * s)}" fill="#fff"/><circle cx="${f(x + g - 1.5 * s)}" cy="${f(ey - 1.7 * s)}" r="${f(1.7 * s)}" fill="#fff"/>`;
     }
-    const blush = `<ellipse cx="${f(x - g - 11 * s)}" cy="${f(ey + 10 * s)}" rx="${f(7.5 * s)}" ry="${f(4.6 * s)}" fill="${C.blush}" opacity=".6"/>` +
-      `<ellipse cx="${f(x + g + 11 * s)}" cy="${f(ey + 10 * s)}" rx="${f(7.5 * s)}" ry="${f(4.6 * s)}" fill="${C.blush}" opacity=".6"/>`;
+    const blush = `<ellipse cx="${f(x - g - 11 * s)}" cy="${f(ey + 10 * s)}" rx="${f(7.5 * s)}" ry="${f(4.6 * s)}" fill="${C.blush}" opacity=".45"/>` +
+      `<ellipse cx="${f(x + g + 11 * s)}" cy="${f(ey + 10 * s)}" rx="${f(7.5 * s)}" ry="${f(4.6 * s)}" fill="${C.blush}" opacity=".45"/>`;
     let mouth;
     if (kind === 'sleepy') mouth = `<ellipse cx="${f(x)}" cy="${f(ey + 15 * s)}" rx="${f(4 * s)}" ry="${f(4.6 * s)}" fill="${INK}"/>`;
     else if (kind === 'zap') mouth = `<path d="M${f(x - 7 * s)} ${f(ey + 11 * s)}Q${f(x)} ${f(ey + 26 * s)} ${f(x + 7 * s)} ${f(ey + 11 * s)}Z" fill="${INK}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`;
-    else mouth = `<path d="M${f(x - 9 * s)} ${f(ey + 10 * s)}Q${f(x)} ${f(ey + 21 * s)} ${f(x + 9 * s)} ${f(ey + 10 * s)}" stroke="${INK}" stroke-width="${f(3.8 * s + 0.4)}" fill="none"/>`;
+    else mouth = `<path d="M${f(x - 9 * s)} ${f(ey + 10 * s)}Q${f(x)} ${f(ey + 21 * s)} ${f(x + 9 * s)} ${f(ey + 10 * s)}" stroke="${INK}" stroke-width="${f(3.2 * s + 0.4)}" fill="none"/>`;
     return eyes + blush + mouth;
   }
 
@@ -150,7 +160,7 @@
   }
 
   const shine = (x, y, len, deg = -35) =>
-    `<path d="M${f(-len / 2)} 0Q0 ${f(-len * 0.16)} ${f(len / 2)} 0" transform="translate(${f(x)} ${f(y)}) rotate(${deg})" stroke="#fff" stroke-width="7" stroke-linecap="round" fill="none" opacity=".85"/>`;
+    `<path d="M${f(-len / 2)} 0Q0 ${f(-len * 0.16)} ${f(len / 2)} 0" transform="translate(${f(x)} ${f(y)}) rotate(${deg})" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none" opacity=".8"/>`;
 
   /* ---------- per-shape dressing ---------- */
 
@@ -163,7 +173,7 @@
       label: 'A heart!',
       svg: outlineFill(x.d, fill) + shine(x.bb.x0 + x.bb.w * 0.24, x.bb.y0 + x.bb.h * 0.3, x.bb.w * 0.16) +
         face(x.bb.cx, x.bb.cy + x.bb.h * 0.0, x.s, 'happy') +
-        sparkle(x.bb.x1 + 20, x.bb.y0 - 6, 13, '#f9e39b') + sparkle(x.bb.x0 - 14, x.bb.y1 - 6, 8),
+        sparkle(x.bb.x1 + 20, x.bb.y0 - 6, 13, '#f9e39b') + sprig(x.bb.x0 - 6, x.bb.y1 - 2, -18, 0.85),
     };
   };
 
@@ -204,7 +214,7 @@
       svg: outlineFill(x.d, fill) + face(x.c.x, x.c.y + x.bb.h * 0.04, x.s, 'sleepy') +
         `<path d="M${f(zx)} ${f(zy)}h16l-16 16h16" stroke="${INK}" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
         `<path d="M${f(zx + 22)} ${f(zy - 20)}h10l-10 10h10" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
-        sparkle(x.bb.x0 - 12, x.bb.y0 + x.bb.h * 0.15, 11) + sparkle(x.bb.x0 + 6, x.bb.y1 + 8, 8, '#dfd0f7'),
+        sparkle(x.bb.x0 - 12, x.bb.y0 + x.bb.h * 0.15, 11) + sprig(x.bb.x0 + 10, x.bb.y1 + 6, -12, 0.8),
     };
   };
 
@@ -249,7 +259,7 @@
           outlineFill(x.d, body) + outlineFill(roofD, roof) +
           `<path d="${door}" fill="#fff" stroke="${INK}" stroke-width="6" stroke-linejoin="round"/><circle cx="${f(bb.cx + dw * 0.22)}" cy="${f(bb.y1 - dh * 0.4)}" r="3.4" fill="${INK}"/>` +
           `<rect x="${f(wx - ws / 2)}" y="${f(wy - ws / 2)}" width="${f(ws)}" height="${f(ws)}" rx="4" fill="#cfe8f8" stroke="${INK}" stroke-width="5"/><path d="M${f(wx)} ${f(wy - ws / 2)}V${f(wy + ws / 2)}M${f(wx - ws / 2)} ${f(wy)}H${f(wx + ws / 2)}" stroke="${INK}" stroke-width="3.5"/>` +
-          sparkle(bb.x1 + 14, bb.y0 - bb.w * 0.3, 11, '#f9e39b') + sparkle(bb.x0 - 10, bb.y1 - 12, 8),
+          sparkle(bb.x1 + 14, bb.y0 - bb.w * 0.3, 11, '#f9e39b') + sprig(bb.x0 - 8, bb.y1 - 2, -15, 0.9),
       };
     }
     // gift box
@@ -267,7 +277,7 @@
         `<path d="M${f(bb.cx - rw / 2)} ${f(bb.y0)}V${f(bb.y1)}M${f(bb.cx + rw / 2)} ${f(bb.y0)}V${f(bb.y1)}" stroke="${INK}" stroke-width="4" opacity=".55"/>` +
         loop(-1) + loop(1) + `<circle cx="${f(bx)}" cy="${f(by - bs * 0.2)}" r="${f(bs * 0.34)}" fill="${rib}" stroke="${INK}" stroke-width="5"/>` +
         face(bb.x0 + bb.w * 0.28, bb.y0 + bb.h * 0.62, x.s * 0.6, 'happy') +
-        sparkle(bb.x1 + 14, bb.y0 - bb.w * 0.1, 11, '#f9e39b') + sparkle(bb.x0 - 12, bb.y1 - 8, 8),
+        sparkle(bb.x1 + 14, bb.y0 - bb.w * 0.1, 11, '#f9e39b') + sprig(bb.x0 - 10, bb.y1 - 2, -15, 0.9),
     };
   };
 
@@ -280,7 +290,7 @@
         `<path d="M${f(bb.cx - bb.w * 0.3)} ${f(ty)}H${f(bb.cx + bb.w * 0.3)}M${f(bb.cx - bb.w * 0.3)} ${f(ty)}L${f(bb.cx)} ${f(bb.y0 + 4)}L${f(bb.cx + bb.w * 0.3)} ${f(ty)}" stroke="${INK}" stroke-width="4" fill="none" stroke-linejoin="round" stroke-linecap="round" opacity=".45"/>` +
         shine(bb.cx - bb.w * 0.16, bb.y0 + bb.h * 0.22, bb.w * 0.14, -55) +
         face(bb.cx, bb.cy + bb.h * 0.17, x.s * 0.7, 'happy') +
-        sparkle(bb.x1 + 12, bb.y0 + 6, 13, '#f9e39b') + sparkle(bb.x0 - 10, bb.y0 + bb.h * 0.3, 9) + sparkle(bb.x1 - 4, bb.y1 + 8, 7, '#cfc3f5'),
+        sparkle(bb.x1 + 12, bb.y0 + 6, 13, '#f9e39b') + sparkle(bb.x0 - 10, bb.y0 + bb.h * 0.3, 9) + sprig(bb.x1 - 6, bb.y1 + 4, 15, 0.8),
     };
   };
 
@@ -378,7 +388,7 @@
       svg: outlineFill(x.d, fill) + face(fx, bb.cy + bb.h * 0.02, x.s * 0.8, 'calm') +
         outlineFill(capD, capC) + brim + `<circle cx="${m(0.55)}" cy="${f(By - w * 0.34)}" r="${f(w * 0.075)}" fill="#fff" stroke="${INK}" stroke-width="5"/>` +
         `<path d="M${f(zx)} ${f(bb.cy - 4)}h14l-14 14h14" stroke="${INK}" stroke-width="4.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
-        sparkle(sg === 1 ? bb.x1 + 6 : bb.x0 - 6, bb.y1 - 10, 10, '#f9e39b') + sparkle(sg === 1 ? bb.x0 - 12 : bb.x1 + 12, bb.y1 - bb.h * 0.2, 7),
+        sparkle(sg === 1 ? bb.x1 + 6 : bb.x0 - 6, bb.y1 - 10, 10, '#f9e39b') + sprig(sg === 1 ? bb.x0 - 6 : bb.x1 + 6, bb.y1 - 4, sg * -15, 0.8),
     };
   };
 
@@ -403,7 +413,7 @@
     return {
       label: 'Infinite good vibes!',
       svg: outlineFill(x.d, fill) + face(bb.x0 + bb.w * 0.25, bb.cy - bb.h * 0.04, s, 'happy') + face(bb.x1 - bb.w * 0.25, bb.cy - bb.h * 0.04, s, 'happy') +
-        sparkle(bb.cx, bb.y0 - 14, 11, '#f9e39b') + sparkle(bb.x1 + 10, bb.y1 + 8, 8) + sparkle(bb.x0 - 8, bb.y0 - 4, 7, '#d5c8f3'),
+        sparkle(bb.cx, bb.y0 - 14, 11, '#f9e39b') + sprig(bb.x1 + 6, bb.y1 + 6, 15, 0.85) + sparkle(bb.x0 - 8, bb.y0 - 4, 7, '#d5c8f3'),
     };
   };
 
@@ -414,7 +424,7 @@
       label: 'Nailed it!',
       svg: `<circle cx="${f(bb.cx)}" cy="${f(bb.cy)}" r="${f(r)}" fill="#e6f6ec"/>` +
         ribbon(x.d, fill, W) + `<path d="${x.d}" transform="translate(${f(-W * 0.1)} ${f(-W * 0.12)})" stroke="#fff" stroke-width="${f(W * 0.16)}" fill="none" stroke-linecap="round" opacity=".55"/>` +
-        sparkle(bb.cx + r * 0.72, bb.cy - r * 0.55, 13, '#f9e39b') + sparkle(bb.cx - r * 0.7, bb.cy - r * 0.45, 8) + sparkle(bb.cx + r * 0.5, bb.cy + r * 0.7, 7, '#c7b4ee'),
+        sparkle(bb.cx + r * 0.72, bb.cy - r * 0.55, 13, '#f9e39b') + sparkle(bb.cx - r * 0.7, bb.cy - r * 0.45, 8) + sprig(bb.cx + r * 0.55, bb.cy + r * 0.72, 10, 0.9),
     };
   };
 

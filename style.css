@@ -254,3 +254,13 @@ h3 { font-size: 1rem; margin: 12px 0 2px; font-weight: 700; }
 @media (prefers-reduced-motion: reduce) {
   .art, .label, .veil, .confetti span, .count span { animation-duration: .01s; animation-delay: 0s; }
 }
+
+/* hand icons */
+.tip-ico { display: inline-grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; color: var(--ink); }
+.tip-ico.pink { background: #ffe6ee; }
+.tip-ico.blue { background: #e6f3fc; }
+.tip-ico.sand { background: #fff3d0; }
+.tip-ico svg { width: 28px; height: 28px; }
+.hint svg { width: 17px; height: 17px; vertical-align: -3px; margin-right: 5px; }
+.seg button { display: inline-flex; align-items: center; gap: 6px; }
+.seg-ico svg { width: 15px; height: 15px; display: block; }
